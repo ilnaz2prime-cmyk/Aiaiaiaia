@@ -1,62 +1,18 @@
-import telebot
-import os
-import json
-import urllib.request
-import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
-
-TOKEN = '8897966443:AAHx6x6r00rVmFeFCmzQGrwTftU63cys828'
-FAL_KEY = '056a7ecc-510c-4c73-94d9-901a65d0f8fd:6a63da9d7da7f3cff77a297a3f46bd0e'
-
-bot = telebot.TeleBot(TOKEN)
-
-# Сервер для поддержания активности на Render 24/7
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is online 24/7!")
-
-def run_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
-    server.serve_forever()
-
-threading.Thread(target=run_server, daemon=True).start()
-
-@bot.message_handler(commands=['start'])
-def start(message):
-    text = (
-        "👋 **Gemini Omni Flash 1.1 Video Bot**\n\n"
-        "Отправь команду:\n"
-        "`/video <описание сцены на английском>`\n\n"
-        "Пример:\n"
-        "`/video sports car drifting in rainy tokyo at night, cinematic 4k`"
-    )
-    bot.reply_to(message, text, parse_mode='Markdown')
-
 @bot.message_handler(commands=['video', 'omni'])
 def create_video(message):
     prompt = message.text.replace('/video', '').replace('/omni', '').strip()
     if not prompt:
-        bot.reply_to(message, "⚠️ Напиши промпт:\n`/video futuristic drone flying over neon city`", parse_mode='Markdown')
+        bot.reply_to(message, "⚠️ Напиши промпт:\n`/video sports car drifting at high speed, neon rain`", parse_mode='Markdown')
         return
 
-    status_msg = bot.reply_to(message, "🎬 Генерация через **Gemini Omni Flash 1.1** (10 сек)... Подожди около минуты.")
+    status_msg = bot.reply_to(message, "🎬 Генерация видео запущена (Fal GPU)... Ожидание около 30–50 сек.")
 
-    # Точный эндпоинт Gemini Omni Flash 1.1 на fal.ai
-    submit_url = "https://queue.fal.run/google/gemini-omni-flash/v1.1/text-to-video"
+    submit_url = "https://queue.fal.run/fal-ai/ltx-video"
     headers = {
         "Authorization": f"Key {FAL_KEY}",
         "Content-Type": "application/json"
     }
-    payload = json.dumps({
-        "prompt": prompt,
-        "duration": 10,
-        "aspect_ratio": "16:9",
-        "resolution": "720p"
-    }).encode('utf-8')
+    payload = json.dumps({"prompt": prompt}).encode('utf-8')
 
     temp_file = f"video_{message.chat.id}.mp4"
     try:
@@ -67,9 +23,8 @@ def create_video(message):
         status_url = submit_res.get("status_url")
         response_url = submit_res.get("response_url")
 
-        # Ожидание генерации
         video_url = None
-        for _ in range(60):
+        for _ in range(50):
             time.sleep(3)
             check_req = urllib.request.Request(status_url, headers=headers)
             with urllib.request.urlopen(check_req, timeout=30) as check_resp:
@@ -86,10 +41,9 @@ def create_video(message):
                     break
 
         if not video_url:
-            bot.reply_to(message, "❌ Не удалось получить видео (таймаут). Попробуй ещё раз.")
+            bot.reply_to(message, "❌ Таймаут очереди. Попробуй ещё раз.")
             return
 
-        # Скачивание файла
         req_dl = urllib.request.Request(video_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req_dl, timeout=120) as v_resp, open(temp_file, 'wb') as f:
             f.write(v_resp.read())
@@ -98,7 +52,7 @@ def create_video(message):
             bot.send_video(
                 message.chat.id,
                 video=vf,
-                caption=f"🎬 **Gemini Omni Flash 1.1:**\n{prompt}",
+                caption=f"🎬 **Результат:**\n{prompt}",
                 supports_streaming=True,
                 parse_mode='Markdown'
             )
@@ -115,6 +69,3 @@ def create_video(message):
     finally:
         if os.path.exists(temp_file):
             os.remove(temp_file)
-
-print("Бот с Gemini Omni Flash 1.1 запущен!")
-bot.infinity_polling(timeout=20, long_polling_timeout=10)
