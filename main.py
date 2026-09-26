@@ -1,16 +1,17 @@
 import telebot
-import urllib.parse
-import urllib.request
-import json
-import random
 import os
+import json
+import urllib.request
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
 TOKEN = '8897966443:AAHx6x6r00rVmFeFCmzQGrwTftU63cys828'
+FAL_KEY = '056a7ecc-510c-4c73-94d9-901a65d0f8fd:6a63da9d7da7f3cff77a297a3f46bd0e'
+
 bot = telebot.TeleBot(TOKEN)
 
-# Сервер для поддержания активности Render 24/7
+# Сервер для работы Render 24/7
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -27,41 +28,69 @@ threading.Thread(target=run_server, daemon=True).start()
 @bot.message_handler(commands=['start'])
 def start(message):
     text = (
-        "👋 **AI Studio Bot**\n\n"
-        "🎬 **/video <описание>** или **/omni <описание>** — генерация видео на **10 секунд**\n"
-        "🎨 **/pic <описание>** — нарисовать арт\n"
-        "💬 **Любой вопрос** — общение с нейросетью"
+        "👋 **Gemini Omni Flash 1.1 Video Bot**\n\n"
+        "Отправь запрос:\n"
+        "`/video <описание на английском>`\n\n"
+        "Пример:\n"
+        "`/video sports car drifting in rainy tokyo at night, cinematic 4k`"
     )
     bot.reply_to(message, text, parse_mode='Markdown')
 
-# Генерация 10-секундного видео
 @bot.message_handler(commands=['video', 'omni'])
-def create_10s_video(message):
+def create_video(message):
     prompt = message.text.replace('/video', '').replace('/omni', '').strip()
     if not prompt:
-        bot.reply_to(message, "⚠️ Напиши описание:\nПример: `/video neon car speeding down highway at night`", parse_mode='Markdown')
+        bot.reply_to(message, "⚠️ Напиши промпт:\n`/video futuristic drone flying over neon city`", parse_mode='Markdown')
         return
 
-    status_msg = bot.reply_to(message, "⏳ Создаю видео на 10 секунд... Рендер занимает около 2-3 минут, подожди пожалуйста.")
-    
-    seed = random.randint(1, 9999999)
-    encoded = urllib.parse.quote(prompt)
-    
-    # Задаём duration=10 для 10-секундного ролика
-    video_url = f"https://image.pollinations.ai/prompt/{encoded}?model=wan&duration=10&seed={seed}&nologo=true"
-    temp_filename = f"video_{message.chat.id}_{seed}.mp4"
+    status_msg = bot.reply_to(message, "🎬 Генерация через **Gemini Omni Flash 1.1** (10 сек)... Подожди около минуты.")
 
+    # Модель Gemini Omni Flash 1.1 на fal.ai
+    submit_url = "https://queue.fal.run/fal-ai/google/gemini-omni-flash/v1.1/text-to-video"
+    headers = {
+        "Authorization": f"Key {FAL_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = json.dumps({
+        "prompt": prompt,
+        "duration": "10s",
+        "aspect_ratio": "16:9"
+    }).encode('utf-8')
+
+    temp_file = f"video_{message.chat.id}.mp4"
     try:
-        req = urllib.request.Request(video_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=360) as response, open(temp_filename, 'wb') as out_file:
-            out_file.write(response.read())
+        req = urllib.request.Request(submit_url, data=payload, headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            submit_res = json.loads(resp.read().decode('utf-8'))
 
-        with open(temp_filename, 'rb') as video_file:
+        status_url = submit_res.get("status_url")
+        response_url = submit_res.get("response_url")
+
+        video_url = None
+        for _ in range(60):
+            time.sleep(3)
+            check_req = urllib.request.Request(status_url, headers=headers)
+            with urllib.request.urlopen(check_req, timeout=30) as check_resp:
+                check_data = json.loads(check_resp.read().decode('utf-8'))
+                if check_data.get("status") == "COMPLETED":
+                    res_req = urllib.request.Request(response_url, headers=headers)
+                    with urllib.request.urlopen(res_req, timeout=30) as r_resp:
+                        final_data = json.loads(r_resp.read().decode('utf-8'))
+                        video_obj = final_data.get("video", {})
+                        video_url = video_obj.get("url") if isinstance(video_obj, dict) else final_data.get("video_url")
+                    break
+
+        if not video_url:
+            bot.reply_to(message, "❌ Не удалось получить видео (таймаут). Попробуй ещё раз.")
+            return
+
+        urllib.request.urlretrieve(video_url, temp_file)
+
+        with open(temp_file, 'rb') as vf:
             bot.send_video(
                 message.chat.id,
-                video=video_file,
-                caption=f"🎬 **Видео (10 сек):** {prompt}",
-                supports_streaming=True,
+                video=vf,
+                caption=f"🎬 **Gemini Omni Flash 1.1 (10 сек):**\n{prompt}",
                 parse_mode='Markdown'
             )
 
@@ -71,55 +100,12 @@ def create_10s_video(message):
             pass
 
     except Exception as e:
-        print(f"Video Error: {e}")
-        bot.reply_to(message, "❌ Сервер генерации видео перегружен или не ответил вовремя. Попробуй ещё раз чуть позже.")
-    
+        print(f"Error: {e}")
+        bot.reply_to(message, f"❌ Ошибка генерации: {e}")
+
     finally:
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
 
-# Рисование картинок
-@bot.message_handler(commands=['pic'])
-def create_pic(message):
-    prompt = message.text.replace('/pic', '').strip()
-    if not prompt:
-        bot.reply_to(message, "⚠️ Напиши промпт: `/pic futuristic robot in cyberpunk city`", parse_mode='Markdown')
-        return
-    bot.reply_to(message, "🎨 Рисую изображение...")
-    seed = random.randint(1, 9999999)
-    encoded = urllib.parse.quote(prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width=1024&height=1024&seed={seed}&nologo=true"
-    try:
-        bot.send_photo(message.chat.id, photo=url, caption=f"✨ {prompt}")
-    except Exception as e:
-        print(f"Pic Error: {e}")
-        bot.reply_to(message, "❌ Ошибка при генерации картинки.")
-
-# Текстовый диалог по любому другому сообщению
-@bot.message_handler(func=lambda message: True)
-def chat_ai(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    try:
-        api_url = "https://text.pollinations.ai/openai"
-        payload = {
-            "model": "gemini-flash",
-            "messages": [
-                {"role": "system", "content": "Ты полезный ассистент, отвечай кратко и точно на русском языке."},
-                {"role": "user", "content": message.text}
-            ]
-        }
-        req = urllib.request.Request(
-            api_url,
-            data=json.dumps(payload).encode('utf-8'),
-            headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'}
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            reply = data['choices'][0]['message']['content']
-        bot.reply_to(message, reply)
-    except Exception as e:
-        print(f"Chat Error: {e}")
-        bot.reply_to(message, "⚠️ Сервер не ответил, попробуй позже.")
-
-print("Бот запущен с генерацией на 10 сек!")
+print("Бот запущен!")
 bot.infinity_polling(timeout=20, long_polling_timeout=10)
