@@ -1,5 +1,14 @@
-import telebot
+import sys
 import os
+
+print("=== Старт бота ===", flush=True)
+
+try:
+    import telebot
+except ImportError:
+    print("ОШИБКА: не установлен пакет pyTelegramBotAPI. Проверь requirements.txt", flush=True)
+    sys.exit(1)
+
 import json
 import urllib.request
 import time
@@ -9,21 +18,29 @@ import threading
 TOKEN = os.environ.get('BOT_TOKEN')
 FAL_KEY = os.environ.get('FAL_KEY')
 
-if not TOKEN or not FAL_KEY:
-    raise RuntimeError("Задай переменные окружения BOT_TOKEN и FAL_KEY")
+if not TOKEN:
+    print("ОШИБКА: переменная окружения BOT_TOKEN не задана", flush=True)
+    sys.exit(1)
+if not FAL_KEY:
+    print("ОШИБКА: переменная окружения FAL_KEY не задана", flush=True)
+    sys.exit(1)
+
+print("Токены найдены, запускаю бота...", flush=True)
 
 bot = telebot.TeleBot(TOKEN)
 
-# Сервер для поддержания активности 24/7 (Render/Railway и т.п.)
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot is online 24/7!")
+    def log_message(self, format, *args):
+        pass  # не засорять логи HTTP-запросами
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    print(f"HTTP-сервер слушает порт {port}", flush=True)
     server.serve_forever()
 
 threading.Thread(target=run_server, daemon=True).start()
@@ -81,43 +98,3 @@ def create_video(message):
                         final_data = json.loads(r_resp.read().decode('utf-8'))
                         video_obj = final_data.get("video")
                         if isinstance(video_obj, dict):
-                            video_url = video_obj.get("url")
-                        elif isinstance(video_obj, str):
-                            video_url = video_obj
-                    break
-                elif check_data.get("status") == "FAILED":
-                    bot.reply_to(message, f"❌ Генерация не удалась: {check_data.get('error', 'неизвестная ошибка')}")
-                    return
-
-        if not video_url:
-            bot.reply_to(message, "❌ Не удалось получить видео (таймаут). Попробуй ещё раз.")
-            return
-
-        req_dl = urllib.request.Request(video_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req_dl, timeout=120) as v_resp, open(temp_file, 'wb') as f:
-            f.write(v_resp.read())
-
-        with open(temp_file, 'rb') as vf:
-            bot.send_video(
-                message.chat.id,
-                video=vf,
-                caption=f"🎬 **Omni Flash 1.1:**\n{prompt}",
-                supports_streaming=True,
-                parse_mode='Markdown'
-            )
-
-        try:
-            bot.delete_message(message.chat.id, status_msg.message_id)
-        except Exception:
-            pass
-
-    except Exception as e:
-        print(f"Error: {e}")
-        bot.reply_to(message, f"❌ Ошибка генерации: {e}")
-
-    finally:
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
-
-print("Бот запущен!")
-bot.infinity_polling(timeout=20, long_polling_timeout=10)
